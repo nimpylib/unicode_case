@@ -20,8 +20,7 @@ template istitleImpl*(a, isupper, islower: typed, iter, firstItemGetter) =
   let le = len(a)
   if le == 1:
     let c = a.firstItemGetter
-    if c.isupper: return true
-    return false
+    return c.isupper
   if le == 0: return false
 
   var cased, previous_cased: bool

@@ -1,10 +1,11 @@
 
-import std/unicode except split
+import std/unicode except split, isTitle, isUpper
 import std/strutils except strip, split, rsplit
 import std/tables
+from std/algorithm import binarySearch
 
 include ./private/[
-  toUpperMapper, casefoldMapper
+  toUpperMapper, casefoldMapper, istitleButNotIsUpper,
 ]
 import ./unicode_case/utils
 import pkg/nimpatch/castChar
@@ -70,10 +71,25 @@ gen_ch toUpper:
   else:
     result.add s
 
+proc isTitleButNotIsUpper(r: Rune): bool{.inline.} =
+  ## `isTitle` but not `isUpper`
+  ##  e.g. `ǅ` is title but not upper, while `Ǆ` is upper but not title.
+  0 <= binarySearch(IsTitleButNotIsUpper, r.int32)
+
+#XXX:NIM-BUG: `isUpper` in Nim is different from that in Python.
+template isUpperOrTitle(r: Rune): bool = unicode.isUpper(r)
+proc isUpper(r: Rune): bool =
+  ## `isUpper` in Python is different from `isUpper` in Nim.
+  isUpperOrTitle(r) and not isTitleButNotIsUpper(r)
+
+template genCaseOrTitle(prc; isTitle){.dirty.} =
+  proc `prc ortitle`(r: Rune): bool = prc(r) or isTitle(r)
+
+genCaseOrTitle isLower, unicode.isTitle
+
 func isCased(r: Rune): bool =
   ## Unicode standard 5.0 introduce `isCased`
-  r.isLower or r.isUpper or r.isTitle
-
+  r.isLower or r.isUpperOrTitle
 
 type RuneImpl = int32
 proc py_toTitle(r: Rune): Rune =
@@ -135,11 +151,13 @@ template firstChar(s: openArray[Rune]): Rune = s[0]
 template strAllAlpha(s: openArray[Rune]; isWhat, notWhat): untyped =
   s.allAlpha isWhat, notWhat, asIs, firstChar
 
+
 template genIs3(T; runes){.dirty.} =
-  func islower*(a: T): bool = a.strAllAlpha isLower, isUpper
-  func isupper*(a: T): bool = a.strAllAlpha isUpper, isLower
+  func islower*(a: T): bool = a.strAllAlpha isLower, `isUpper ortitle`
+  func isupper*(a: T): bool = a.strAllAlpha isUpper, `isLower ortitle`
   func istitle*(a: T): bool =
-    a.istitleImpl isUpper, isLower, runes, firstChar
+    template isTitle(r: Rune): bool = isTitleButNotIsUpper(r)
+    a.istitleImpl `isUpper ortitle`, isLower, runes, firstChar
 
 genIs3 openArray[char], runes
 genIs3 openArray[Rune], asIs

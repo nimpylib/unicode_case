@@ -9,3 +9,4 @@ htmldocs/
 /tests/*
 !/tests/*.nim
 !/tests/*.nims
+__pycache__/
