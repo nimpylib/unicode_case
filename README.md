@@ -11,3 +11,9 @@
 
 routines of unicode case like casefold
 
+and note if you find existing routines like isUpper of `std/unicode` in this library,
+
+it means those in `std/unicode` have different meanings from those in Python,
+as well as those in this library.
+
+For example, Nim's `isUpper` considers title-case as upper too, while Python's doesn't
