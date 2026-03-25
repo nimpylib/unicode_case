@@ -26,9 +26,12 @@ const CasefoldTable = CasefoldTableT(
   full: toTable FullMapper
 )
 
-func addCasefold(res: var string, k: Rune) =
+func add(result: var seq[Rune], ls: string) =
+  for r in ls.runes: result.add r
+
+func addCasefold[S: string|seq[Rune]](res: var S, k: Rune) =
   template tab: untyped = CasefoldTable
-  template add(s: var string, ri: RuneI) =
+  template add(s: var S, ri: RuneI) =
     s.add Rune ri
   let runeI = RuneI k
   template addIfIn(table) =
@@ -40,22 +43,36 @@ func addCasefold(res: var string, k: Rune) =
   addIfIn tab.full
   res.add k
 
+template loop(init, s, L, doWith_ch) =
+  result = init(L)
+  for ch{.inject.} in s:
+    doWith_ch
+
 template gen_with_body(name; body){.dirty.} =
-  template `name Impl`(runes) = body
-  func name*(s: openArray[char]): string = `name Impl` s.runes
-  func name*(s: openArray[Rune]): string = `name Impl` s
-template gen_ch(name; pre; doWith_ch){.dirty.} =
+  template `name Impl`(s; L: int; init: typed) = body
+  func name*(s: string): string = `name Impl` s.runes, s.len, newStringOfCap
+  func name*(s: openArray[Rune]): seq[Rune] = `name Impl` s, s.len, newSeqOfCap[Rune]
+template gen_ch_no_char(name; pre; doWith_ch){.dirty.} =
   gen_with_body name:
     pre
-    result = newStringOfCap s.len
-    for ch{.inject.} in runes:
-      doWith_ch
+    loop(init, s, L, doWith_ch)
 
-template gen_ch(name; doWith_ch) =
-  gen_ch(name): discard
+template gen_ch_no_char(name; doWith_ch){.dirty.} =
+  gen_ch_no_char(name): discard
   do: doWith_ch
 
-gen_ch casefold:
+template gen_ch(name; pre; doWith_ch; doWith_char){.dirty.} =
+  gen_ch_no_char(name, pre, doWith_ch)
+  func name*(s: openArray[char]): seq[char] =
+    pre
+    loop newSeqOfCap[char], s, s.len, doWith_char
+
+template gen_ch(name; doWith_ch; doWith_char) =
+  gen_ch(name): discard
+  do: doWith_ch
+  do: doWith_char
+
+gen_ch_no_char casefold:
   result.addCasefold ch
 
 gen_ch toLower:
@@ -63,13 +80,17 @@ gen_ch toLower:
     result.add "i\u0307"
     continue
   result.add unicode.toLower ch
+do:
+  result.add toLowerAscii ch
 
 gen_ch toUpper:
-  let s = OneUpperToMoreTable.getOrDefault ch.int32
-  if s.len == 0:
+  let ss = OneUpperToMoreTable.getOrDefault ch.int32
+  if ss.len == 0:
     result.add ch.toUpper
   else:
-    result.add s
+    result.add ss
+do:
+  result.add toUpperAscii ch
 
 proc isTitleButNotIsUpper(r: Rune): bool{.inline.} =
   ## `isTitle` but not `isUpper`
@@ -82,8 +103,16 @@ proc isUpper(r: Rune): bool =
   ## `isUpper` in Python is different from `isUpper` in Nim.
   isUpperOrTitle(r) and not isTitleButNotIsUpper(r)
 
+template genIsX(name){.dirty.} =
+  template name(c: char): bool = `name Ascii` c
+genIsX islower
+genIsX isupper
+template isUpperOrTitle(r: char): bool = isUpper(r)
+
+
 template genCaseOrTitle(prc; isTitle){.dirty.} =
   proc `prc ortitle`(r: Rune): bool = prc(r) or isTitle(r)
+  proc `prc ortitle`(r: char): bool = prc(r)
 
 genCaseOrTitle isLower, unicode.isTitle
 
@@ -117,48 +146,72 @@ do:
     if previous_is_cased: ch.toLower
     else: ch.py_toTitle
   previous_is_cased = ch.isCased
+do:
+  var c = ch
+  if ch.isLowerAscii:
+    if not previous_is_cased:
+      c = c.toUpperAscii
+    previous_is_cased = true
+  elif ch.isUpperAscii:
+    if previous_is_cased:
+      c = c.toLowerAscii
+    previous_is_cased = true
+  else:
+    previous_is_cased = false
+  result.add c
 
 const
   PyMajor{.intdefine.} = 3
   PyMinor{.intdefine.} = 14
 
-template capitalizeImpl(i) =
+func add(result: var string, ls: seq[char]) =
+  for c in ls:
+    result.add c
+
+template capitalizeImpl(subs; py_toUpper, py_toTitle) =
   let first = when (PyMajor, PyMinor) < (3,8):
     py_toUpper(rune)
   else:
     py_toTitle(rune)
-  result = $first & s.toOpenArray(i, s.high).toLower()
+  result.add first
+  result.add subs.toLower()
 
-func capitalize*(s: openArray[char]): string =
-  if len(s) == 0: return
+template capitalizeImpl(i) = capitalizeImpl(i, py_toUpper, py_toTitle)
+
+func capitalize*(s: string): string =
+  if s.len == 0: return
   var
     rune: Rune
     i = 0
   fastRuneAt(s, i, rune, doInc = true)
-  capitalizeImpl i
+  capitalizeImpl s[i..^1]
 
-func capitalize*(s: openArray[Rune]): string =
-  if len(s) == 0: return
+func capitalize*(s: openArray[char]): seq[char] =
+  if s.len == 0: return
   let rune = s[0]
-  capitalizeImpl 1
+  capitalizeImpl s.toOpenArray(1, s.high), toUpperAscii, toUpperAscii
 
-template firstChar(s: openArray[char]): Rune = s.runeAt 0
-template strAllAlpha(s: openArray[char]; isWhat, notWhat): untyped =
+func capitalize*(s: openArray[Rune]): seq[Rune] =
+  if s.len == 0: return
+  let rune = s[0]
+  capitalizeImpl s.toOpenArray(1, s.high)
+
+template firstChar(s: string): Rune = s.runeAt 0
+template strAllAlpha(s: string; isWhat, notWhat): untyped =
   s.allAlpha isWhat, notWhat, runes, firstChar
 
 template asIs(x): untyped = x
-template firstChar(s: openArray[Rune]): Rune = s[0]
-template strAllAlpha(s: openArray[Rune]; isWhat, notWhat): untyped =
+template firstChar[C](s: openArray[C]): C = s[0]
+template strAllAlpha[C](s: openArray[C]; isWhat, notWhat): untyped =
   s.allAlpha isWhat, notWhat, asIs, firstChar
-
 
 template genIs3(T; runes){.dirty.} =
   func islower*(a: T): bool = a.strAllAlpha isLower, `isUpper ortitle`
   func isupper*(a: T): bool = a.strAllAlpha isUpper, `isLower ortitle`
   func istitle*(a: T): bool =
-    template isTitle(r: Rune): bool = isTitleButNotIsUpper(r)
     a.istitleImpl `isUpper ortitle`, isLower, runes, firstChar
 
+genIs3 string, runes
 genIs3 openArray[char], runes
 genIs3 openArray[Rune], asIs
 
